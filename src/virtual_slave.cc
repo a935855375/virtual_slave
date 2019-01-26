@@ -32,7 +32,8 @@ using std::string;
 
 #include "prealloced_array.h"
 #include "virtual_slave.h"
-#include "./Config/Config.h"
+#include "Config/Config.h"
+
 /*
   error() is used in macro BINLOG_ERROR which is invoked in
   rpl_gtid.h, hence the early forward declaration.
@@ -373,7 +374,14 @@ static Exit_status safe_connect()
     at new connect attempt. The final safe_connect resources
     are mysql_closed at the end of program, explicitly.
   */
-  mysql_close(mysql);
+  if(mysql)
+  {
+    if(mysql_ping(mysql) ==0 )
+    {
+      mysql_close(mysql);
+    }
+  }
+
   mysql= mysql_init(NULL);
 
   if (!mysql)
@@ -640,23 +648,41 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
   uchar *command_buffer= NULL;
   size_t command_size= 0;
   ulong len= 0;
+  bool recovery_mode =false;
+  char new_binlog_file_name[FN_REFLEN + 1];
+  unsigned long int total_bytes=0;
+  unsigned long int re_connect_start_position;
+  size_t tlen = strlen(logname);
+  size_t BINLOG_NAME_INFO_SIZE = tlen;
 
  // size_t logname_len= 0;
   uint server_id= 0;
   NET* net= NULL;
   my_off_t old_off= start_position_mot;
-  char fname[FN_REFLEN + 1];
+//  char fname[FN_REFLEN + 1];
   char log_file_name[FN_REFLEN + 1];
   Exit_status retval= OK_CONTINUE;
   enum enum_server_command command= COM_END;
 
-  fname[0]= log_file_name[0]= 0;
+//  fname[0]= log_file_name[0]= 0;
+  log_file_name[0]= 0;
+
+
+  if (tlen > UINT_MAX)
+  {
+    error("Log name too long.");
+    return ERROR_STOP;
+  }
+
+
 
   /*
     Even if we already read one binlog (case of >=2 binlogs on command line),
     we cannot re-use the same connection as before, because it is now dead
     (COM_BINLOG_DUMP kills the thread when it finishes).
   */
+
+  vs_reconnect:
   if ((retval= safe_connect()) != OK_CONTINUE)
   {
     return retval;
@@ -668,16 +694,40 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
     return retval;
   }
 
+  if((retval=get_master_uuid()) != OK_CONTINUE)
+  {
+    return retval;
+  }
+
+  if(switched && recovery_mode) //master changed;
+  {
+    //todo switch hook;
+    if((retval = get_executed_gtid()) != OK_CONTINUE)
+    {
+      return retval;
+    }
+    if((retval = set_gtid_executed()) != OK_CONTINUE)
+    {
+      return retval;
+    }
+    opt_remote_proto = BINLOG_DUMP_GTID;
+    binlog_file_open_mode = O_WRONLY|O_BINARY ; //overwrite
+  }
+  else if(recovery_mode && !switched)
+  {
+    opt_remote_proto = BINLOG_DUMP_NON_GTID;
+    BINLOG_NAME_INFO_SIZE = strlen(new_binlog_file_name); //新的文件
+    re_connect_start_position = (start_position > respond_pos ? start_position:respond_pos);
+    binlog_file_open_mode = O_WRONLY | FAPPEND |O_BINARY ;
+
+  }
+
+
   if (connection_server_id != -1)
   {
     server_id= static_cast<uint>(connection_server_id);
   }
-  size_t tlen = strlen(logname);
-  if (tlen > UINT_MAX) 
-  {
-    error("Log name too long.");
-    return ERROR_STOP;
-  }
+
 
   binlogRelayIoParam = new Binlog_relay_IO_param;
   binlogRelayIoParam->channel_name=strdup("test");
@@ -694,10 +744,14 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
     error("call repl_semi_slave_request_dump error");
   }
 
-  size_t BINLOG_NAME_INFO_SIZE = tlen;
+
 
   if (opt_remote_proto == BINLOG_DUMP_NON_GTID)
   {
+    bool suppress_warnings;
+    register_slave_on_master(mysql,&suppress_warnings);
+
+
     command= COM_BINLOG_DUMP;
     size_t allocation_size= ::BINLOG_POS_OLD_INFO_SIZE +
       BINLOG_NAME_INFO_SIZE + ::BINLOG_FLAGS_INFO_SIZE +
@@ -714,13 +768,13 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
       COM_BINLOG_DUMP accepts only 4 bytes for the position, so
       we are forced to cast to uint32.
     */
-    int4store(ptr_buffer, (uint32) start_position);
+    int4store(ptr_buffer, (uint32) re_connect_start_position);
     ptr_buffer+= ::BINLOG_POS_OLD_INFO_SIZE;
     int2store(ptr_buffer, get_dump_flags());
     ptr_buffer+= ::BINLOG_FLAGS_INFO_SIZE;
     int4store(ptr_buffer, server_id);
     ptr_buffer+= ::BINLOG_SERVER_ID_INFO_SIZE;
-    memcpy(ptr_buffer, logname, BINLOG_NAME_INFO_SIZE);
+    memcpy(ptr_buffer, new_binlog_file_name, BINLOG_NAME_INFO_SIZE);
     ptr_buffer+= BINLOG_NAME_INFO_SIZE;
 
     command_size= ptr_buffer - command_buffer;
@@ -783,20 +837,106 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
   }
   my_free(command_buffer);
 
-  unsigned long int total_bytes=0;
-  char new_binlog_file_name[FN_REFLEN + 1];
+
+  for(;;)
+  {
+    //recovery mode read.
+    if(recovery_mode)
+    {
+      len = cli_safe_read(mysql, NULL);
+      if (len == packet_error)
+      {
+
+        error("Got error reading packet from server: %s", mysql_error(mysql));
+        recovery_mode=true;
+
+        goto vs_reconnect;
+      }
+      len--;
+
+      const char* event_buf;
+      event_buf= (const char *) net->read_pos + 1;
+      if(handle_repl_semi_slave_read_event((void*)binlogRelayIoParam,(char*)net->read_pos+1,len,&event_buf,&len))
+      {
+        error("call handle_repl_semi_slave_read_event error");
+      }
+      type=(Log_event_type)event_buf[EVENT_TYPE_OFFSET];
+      if((type != binary_log::ROTATE_EVENT) && (type != binary_log::FORMAT_DESCRIPTION_EVENT) )
+      {
+        error("read event error in recovery mode");
+        return ERROR_STOP;
+      }
+
+      if (!(ev= Log_event::read_log_event(event_buf,
+                                          len, &error_msg,
+                                          glob_description_event,
+                                          opt_verify_binlog_checksum)))
+      {
+        error("Could not construct log event object: %s", error_msg);
+        return ERROR_STOP;
+      }
+      /*
+        If reading from a remote host, ensure the temp_buf for the
+        Log_event class is pointing to the incoming stream.
+      */
+      ev->register_temp_buf((char*)event_buf);
+
+      if (type == binary_log::ROTATE_EVENT)
+      {
+        Rotate_log_event *rev= (Rotate_log_event *)ev;
+
+        if(strcmp(new_binlog_file_name,rev->new_log_ident) ==0 )
+        {
+          //无用的ROTATE_EVENT
+          reset_temp_buf_and_delete(rev);
+          continue;
+        }
+        else
+        {
+          //可能恢复模式正好在日志轮换阶段,切换到正常读取模式
+          recovery_mode = false;
+          goto normal_event;
+        }
+      }
+
+      if(type == binary_log::FORMAT_DESCRIPTION_EVENT )
+      {
+        recovery_mode=false;
+
+        delete glob_description_event;
+        glob_description_event= (Format_description_log_event*) ev;
+        print_event_info->common_header_len= glob_description_event->common_header_len;
+        ev->temp_buf= 0;
+        ev= 0;
+        break;
+      }
+
+    }
+    else
+    {
+      break;
+    }
+  }
+
   for (;;)
   {
+    //normal read.
     len = cli_safe_read(mysql, NULL);
     if (len == packet_error)
     {
 
       error("Got error reading packet from server: %s", mysql_error(mysql));
-      return ERROR_STOP;
+      recovery_mode=true;
+      goto vs_reconnect;
     }
     len--;
     if (len < 8 && net->read_pos[0] == 254)
-      break; // end of data
+    {
+      error("Got error reading packet from server: %s",mysql_error(mysql));
+      recovery_mode=true;
+      goto vs_reconnect;
+    }
+    //  break; // end of data
 //      DBUG_PRINT("info",( "len: %lu  net->read_pos[5]: %d\n",
 //			len, net->read_pos[5]));
     /*
@@ -813,172 +953,155 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
 
     if (type == binary_log::HEARTBEAT_LOG_EVENT)
     {
+      error("received HEARTBEAT_LOG_EVENT");
       continue;
     }
 
-    if (!raw_mode || (type == binary_log::ROTATE_EVENT) ||
-        (type == binary_log::FORMAT_DESCRIPTION_EVENT))
+
+    if (!(ev= Log_event::read_log_event(event_buf,
+                                        len, &error_msg,
+                                        glob_description_event,
+                                        opt_verify_binlog_checksum)))
     {
-      if (!(ev= Log_event::read_log_event(event_buf,
-                                          len, &error_msg,
-                                          glob_description_event,
-                                          opt_verify_binlog_checksum)))
-      {
-        error("Could not construct log event object: %s", error_msg);
-        return ERROR_STOP;
-      }
-      /*
-        If reading from a remote host, ensure the temp_buf for the
-        Log_event class is pointing to the incoming stream.
-      */
-      ev->register_temp_buf((char*)event_buf);
+      error("Could not construct log event object: %s", error_msg);
+      return ERROR_STOP;
     }
-    if (raw_mode || (type != binary_log::LOAD_EVENT))
+    /*
+      If reading from a remote host, ensure the temp_buf for the
+      Log_event class is pointing to the incoming stream.
+    */
+    ev->register_temp_buf((char*)event_buf);
+    respond_pos = ev->common_header->log_pos;
+
+    normal_event:
+    /*
+      If this is a Rotate event, maybe it's the end of the requested binlog;
+      in this case we are done (stop transfer).
+      This is suitable for binlogs, not relay logs (but for now we don't read
+      relay logs remotely because the server is not able to do that). If one
+      day we read relay logs remotely, then we will have a problem with the
+      detection below: relay logs contain Rotate events which are about the
+      binlogs, so which would trigger the end-detection below.
+    */
+    if (type == binary_log::ROTATE_EVENT)
     {
+      // error("last total bytes %lu",total_bytes);
+      total_bytes =0;
+      Rotate_log_event *rev= (Rotate_log_event *)ev;
       /*
-        If this is a Rotate event, maybe it's the end of the requested binlog;
-        in this case we are done (stop transfer).
-        This is suitable for binlogs, not relay logs (but for now we don't read
-        relay logs remotely because the server is not able to do that). If one
-        day we read relay logs remotely, then we will have a problem with the
-        detection below: relay logs contain Rotate events which are about the
-        binlogs, so which would trigger the end-detection below.
+        If this is a fake Rotate event, and not about our log, we can stop
+        transfer. If this a real Rotate event (so it's not about our log,
+        it's in our log describing the next log), we print it (because it's
+        part of our log) and then we will stop when we receive the fake one
+        soon.
       */
-      if (type == binary_log::ROTATE_EVENT)
+
+      if (output_file != 0)
       {
-       // error("last total bytes %lu",total_bytes);
-        total_bytes =0;
-        Rotate_log_event *rev= (Rotate_log_event *)ev;
-        /*
-          If this is a fake Rotate event, and not about our log, we can stop
-          transfer. If this a real Rotate event (so it's not about our log,
-          it's in our log describing the next log), we print it (because it's
-          part of our log) and then we will stop when we receive the fake one
-          soon.
-        */
+        my_snprintf(log_file_name, sizeof(log_file_name), "%s%s",
+                    output_file, rev->new_log_ident);
+        memset(new_binlog_file_name,0,(FN_REFLEN + 1));
+        my_stpcpy(new_binlog_file_name, rev->new_log_ident);
+      }
+      else
+      {
+        my_stpcpy(log_file_name, rev->new_log_ident);
+        memset(new_binlog_file_name,0,(FN_REFLEN + 1));
+        my_stpcpy(new_binlog_file_name, rev->new_log_ident);
+      }
 
-        if (output_file != 0)
+      if (rev->common_header->when.tv_sec == 0)
+      {
+        if (!to_last_remote_log)
         {
-          my_snprintf(log_file_name, sizeof(log_file_name), "%s%s",
-                      output_file, rev->new_log_ident);
-          memset(new_binlog_file_name,0,(FN_REFLEN + 1));
-          my_stpcpy(new_binlog_file_name, rev->new_log_ident);
-        }
-        else
-        {
-          my_stpcpy(log_file_name, rev->new_log_ident);
-          memset(new_binlog_file_name,0,(FN_REFLEN + 1));
-          my_stpcpy(new_binlog_file_name, rev->new_log_ident);
-        }
-
-        if (rev->common_header->when.tv_sec == 0)
-        {
-          if (!to_last_remote_log)
-          {
 //            if ((rev->ident_len != logname_len) ||
 //                memcmp(rev->new_log_ident, logname, logname_len))
 //            {
 //              reset_temp_buf_and_delete(rev);
 //              DBUG_RETURN(OK_CONTINUE);
 //            }
-            /*
-              Otherwise, this is a fake Rotate for our log, at the very
-              beginning for sure. Skip it, because it was not in the original
-              log. If we are running with to_last_remote_log, we print it,
-              because it serves as a useful marker between binlogs then.
-            */
-            reset_temp_buf_and_delete(rev);
-            continue;
-          }
           /*
-             Reset the value of '# at pos' field shown against first event of
-             next binlog file (fake rotate) picked by mysqlbinlog --to-last-log
-         */
-          old_off= start_position_mot;
-          len= 0; // fake Rotate, so don't increment old_off /*ashe note: this len is real buf len to write,so 0*/
-        }
-      }
-      else if (type == binary_log::FORMAT_DESCRIPTION_EVENT)
-      {
-        /*
-          This could be an fake Format_description_log_event that server
-          (5.0+) automatically sends to a slave on connect, before sending
-          a first event at the requested position.  If this is the case,
-          don't increment old_off. Real Format_description_log_event always
-          starts from BIN_LOG_HEADER_SIZE position.
-        */
-        // fake event when not in raw mode, don't increment old_off
-        if ((old_off != BIN_LOG_HEADER_SIZE) && (!raw_mode))
-          len= 1;
-        if (raw_mode)
-        {
-          if (result_file && (result_file != stdout))
-            my_fclose(result_file, MYF(0));
-          if (!(result_file = my_fopen(log_file_name, O_WRONLY | O_BINARY,
-                                       MYF(MY_WME))))
-          {
-            error("Could not create log file '%s'", log_file_name);
-            return ERROR_STOP;
-          }
-          DBUG_EXECUTE_IF("simulate_result_file_write_error_for_FD_event",
-                          DBUG_SET("+d,simulate_fwrite_error"););
-          if (my_fwrite(result_file, (const uchar*) BINLOG_MAGIC,
-                        BIN_LOG_HEADER_SIZE, MYF(MY_NABP)))
-          {
-            error("Could not write into log file '%s'", log_file_name);
-            return ERROR_STOP;
-          }
-
-          total_bytes+=4; //BINLOG_MAGIC is 4 bytes.
-
-          /*
-            Need to handle these events correctly in raw mode too 
-            or this could get messy
+            Otherwise, this is a fake Rotate for our log, at the very
+            beginning for sure. Skip it, because it was not in the original
+            log. If we are running with to_last_remote_log, we print it,
+            because it serves as a useful marker between binlogs then.
           */
-          delete glob_description_event;
-          glob_description_event= (Format_description_log_event*) ev;
-          print_event_info->common_header_len= glob_description_event->common_header_len;
-          ev->temp_buf= 0;
-          ev= 0;
+          reset_temp_buf_and_delete(rev);
+          continue;
         }
+        /*
+           Reset the value of '# at pos' field shown against first event of
+           next binlog file (fake rotate) picked by mysqlbinlog --to-last-log
+       */
+        old_off= start_position_mot;
+        len= 0; // fake Rotate, so don't increment old_off /*ashe note: this len is real buf len to write,so 0*/
       }
-      
-      if (type == binary_log::LOAD_EVENT)
-      {
-        DBUG_ASSERT(raw_mode);
-        warning("Attempting to load a remote pre-4.0 binary log that contains "
-                "LOAD DATA INFILE statements. The file will not be copied from "
-                "the remote server. ");
-      }
-
-      if (raw_mode)
-      {
-        DBUG_EXECUTE_IF("simulate_result_file_write_error",
-                        DBUG_SET("+d,simulate_fwrite_error"););
-        if (my_fwrite(result_file, (const uchar*)event_buf, len, MYF(MY_NABP)))
-        {
-          error("Could not write into log file '%s'", log_file_name);
-          retval= ERROR_STOP;
-        }
-        total_bytes += len;
-        if (ev)
-          reset_temp_buf_and_delete(ev);
-      }
-      else
-      {
-        error("Could not recognize raw_mode %s,%i",__FILE__,__LINE__);
-      }
-
-      if (retval != OK_CONTINUE)
-      {
-        return retval;
-      }
-
     }
-    else
+    else if (type == binary_log::FORMAT_DESCRIPTION_EVENT)
     {
-      error("Could not recognize raw_mode %s,%i",__FILE__,__LINE__);
+      /*
+        This could be an fake Format_description_log_event that server
+        (5.0+) automatically sends to a slave on connect, before sending
+        a first event at the requested position.  If this is the case,
+        don't increment old_off. Real Format_description_log_event always
+        starts from BIN_LOG_HEADER_SIZE position.
+      */
+      // fake event when not in raw mode, don't increment old_off
+      if ((old_off != BIN_LOG_HEADER_SIZE) && (!raw_mode))
+        len= 1;
+
+      if (result_file && (result_file != stdout))
+        my_fclose(result_file, MYF(0));
+      if (!(result_file = my_fopen(log_file_name, binlog_file_open_mode,
+                                   MYF(MY_WME))))
+      {
+        error("Could not create log file '%s'", log_file_name);
+        return ERROR_STOP;
+      }
+      DBUG_EXECUTE_IF("simulate_result_file_write_error_for_FD_event",
+                      DBUG_SET("+d,simulate_fwrite_error"););
+      if (my_fwrite(result_file, (const uchar*) BINLOG_MAGIC,
+                    BIN_LOG_HEADER_SIZE, MYF(MY_NABP)))
+      {
+        error("Could not write into log file '%s'", log_file_name);
+        return ERROR_STOP;
+      }
+
+      total_bytes+=4; //BINLOG_MAGIC is 4 bytes.
+
+      /*
+        Need to handle these events correctly in raw mode too
+        or this could get messy
+      */
+      delete glob_description_event;
+      glob_description_event= (Format_description_log_event*) ev;
+      print_event_info->common_header_len= glob_description_event->common_header_len;
+      ev->temp_buf= 0;
+      ev= 0;
     }
+
+    if (type == binary_log::LOAD_EVENT)
+    {
+      DBUG_ASSERT(raw_mode);
+      warning("Attempting to load a remote pre-4.0 binary log that contains "
+              "LOAD DATA INFILE statements. The file will not be copied from "
+              "the remote server. ");
+    }
+
+    if (my_fwrite(result_file, (const uchar*)event_buf, len, MYF(MY_NABP)))
+    {
+      error("Could not write into log file '%s'", log_file_name);
+      retval= ERROR_STOP;
+    }
+    total_bytes += len;
+    if (ev)
+      reset_temp_buf_and_delete(ev);
+    if (retval != OK_CONTINUE)
+    {
+      return retval;
+    }
+
+
 
     /*
       Let's adjust offset for remote log as for local log to produce
@@ -986,7 +1109,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
     */
     old_off+= len-1;
     binlogRelayIoParam->master_log_name = new_binlog_file_name;
-    binlogRelayIoParam->master_log_pos = total_bytes;
+    binlogRelayIoParam->master_log_pos = respond_pos;
 
     //flush or flush+sync binlog file befor replay ack=
     if(fflush(result_file))
@@ -1112,8 +1235,11 @@ int main(int argc, char** argv)
   string _s_output_file = virtual_slave_config.Read("binlog_dir",_s_output_file);
   output_file = string_to_char(_s_output_file);
   string _s_opt_exclude_gtids_str = virtual_slave_config.Read("exclude_gtids",_s_opt_exclude_gtids_str);
-//  opt_exclude_gtids_str = string_to_char(_s_opt_exclude_gtids_str);
   opt_exclude_gtids_str = strdup(_s_opt_exclude_gtids_str.data());
+  binlog_file_open_mode = O_WRONLY | O_BINARY;
+  respond_pos = 0;
+  switched = false;
+
 
   if (gtid_client_init())
   {
@@ -1139,6 +1265,12 @@ int main(int argc, char** argv)
       exit(1);
     dirname_for_local_load= my_strdup(PSI_NOT_INSTRUMENTED,
                                       my_tmpdir(&tmpdir), MY_WME);
+  }
+
+
+  if (args_post_process() == ERROR_STOP)
+  {
+    return 1;
   }
 
   /*
@@ -1362,5 +1494,217 @@ char* string_to_char(string str)
   p[str.length()] = '\0';
   return p;
 }
+
+
+int args_post_process(void)
+{
+  DBUG_ENTER("args_post_process");
+
+//  if (output_file)
+//  {
+//    if (!(result_file = my_fopen(output_file, O_WRONLY | O_BINARY, MYF(MY_WME))))
+//    {
+//      error("Could not create log file '%s'", output_file);
+//      DBUG_RETURN(ERROR_STOP);
+//    }
+//  }
+
+  switch(get_start_gtid_mode)
+  {
+    case 0:
+    {
+      //0:decide by exclude_gtids config(clean binlog_dir);
+      opt_remote_proto = BINLOG_DUMP_GTID;
+      int access_res = access(output_file,R_OK|W_OK);
+      if(access_res ==0 )
+      {
+        binlog_file_open_mode = O_WRONLY | O_BINARY;
+      }
+      else
+      {
+        //todo log here
+        perror("access");
+        int mk_res =  mkdir(output_file,S_IRWXU | S_IRGRP | S_IXGRP);
+        if(mk_res != 0)
+        {
+          //todo log here
+          perror("mkdir");
+          error("create binlog_dir failed");
+        }
+      }
+
+      break;
+    }
+    case 1:
+    {
+      //1:decide by "show master status"(clean binlog_dir);
+      opt_remote_proto = BINLOG_DUMP_GTID;
+
+      retry_connect_show_master_status:
+      if (safe_connect() != OK_CONTINUE)
+      {
+        my_sleep(5000);
+        error("connect to master failed:%i,%s;reconnecting...",mysql_errno(mysql),mysql_error(mysql));
+        goto retry_connect_show_master_status;
+      }
+      if(mysql_real_query(mysql,
+                          "show global variables like 'gtid_executed'",
+                          strlen("show global variables like 'gtid_executed'"))!=0)
+      {
+        error("get master GTID Executed failed:%i,%s",mysql_errno(mysql),mysql_error(mysql));
+        return ERROR_STOP;
+      }
+      MYSQL_RES* res = mysql_store_result(mysql);
+      MYSQL_ROW row = mysql_fetch_row(res);
+      if(row[1])
+      {
+        opt_exclude_gtids_str =strdup(row[1]);
+      }
+      else
+      {
+        opt_exclude_gtids_str = strdup("");
+      }
+      mysql_free_result(res);
+      mysql_close(mysql);
+      binlog_file_open_mode = O_WRONLY | O_BINARY;
+      break;
+    }
+
+    case 2:
+    {
+      //2:decide by last file and pos in binlog_dir;appending
+      opt_remote_proto = BINLOG_DUMP_NON_GTID;
+      error("not supported");
+      return ERROR_STOP;
+      break;
+    }
+
+  }
+  if(set_gtid_executed() == ERROR_STOP)
+  {
+    DBUG_RETURN(ERROR_STOP);
+  }
+
+  DBUG_RETURN(OK_CONTINUE);
+}
+
+Exit_status get_executed_gtid()
+{
+  mysql_free_result(mysql_store_result(mysql));
+  if(mysql_real_query(mysql,
+                      "show global variables like 'gtid_executed'",
+                      strlen("show global variables like 'gtid_executed'"))!=0)
+  {
+    error("get master GTID Executed failed:%i,%s",mysql_errno(mysql),mysql_error(mysql));
+    return ERROR_STOP;
+  }
+  MYSQL_RES* res = mysql_store_result(mysql);
+  MYSQL_ROW row = mysql_fetch_row(res);
+  if(row[1])
+  {
+    opt_exclude_gtids_str =strdup(row[1]);
+  }
+  else
+  {
+    opt_exclude_gtids_str = strdup("");
+  }
+  mysql_free_result(res);
+
+  return OK_CONTINUE;
+}
+
+
+Exit_status set_gtid_executed()
+{
+  global_sid_lock->rdlock();
+
+  if (opt_exclude_gtids_str != NULL)
+  {
+    if (gtid_set_excluded->add_gtid_text(opt_exclude_gtids_str) !=
+        RETURN_STATUS_OK)
+    {
+      error("Could not configure --exclude-gtids '%s'", opt_exclude_gtids_str);
+      global_sid_lock->unlock();
+      return (ERROR_STOP);
+    }
+  }
+
+  global_sid_lock->unlock();
+  return OK_CONTINUE;
+}
+
+/**
+ * Get master uuid and set switch(true or false);
+ * @return ERROR_STOP:failed; OK_CONTINUE:successfully;
+ */
+Exit_status get_master_uuid()
+{
+  char query[] ="show global variables like 'server_uuid'";
+
+  mysql_free_result(mysql_store_result(mysql));
+  if(mysql_real_query(mysql,
+                      query,
+                      strlen(query))!=0)
+  {
+    error("get master uuid failed:%i,%s",mysql_errno(mysql),mysql_error(mysql));
+    return ERROR_STOP;
+  }
+  MYSQL_RES* res = mysql_store_result(mysql);
+  MYSQL_ROW row = mysql_fetch_row(res);
+  if(row[1])
+  {
+     if(master_uuid_new)
+     {
+       free(master_uuid_new);
+     }
+
+     master_uuid_new=strdup(row[1]);
+     if(!master_uuid) //get master uuid first times.
+     {
+       error("connect to master first times,master_uuid:%s",master_uuid_new);
+       master_uuid = strdup(master_uuid_new);
+       switched=false;
+     }
+     else //get master uuid next times.
+     {
+       error("reconnect to master,master_uuid:%s",master_uuid_new);
+       if(strcasecmp(master_uuid,master_uuid_new) ==0 )
+       {
+         error("M-S does not switch");
+         switched=false;
+       }
+       else
+       {
+         error("M-S switched");
+         if(strlen(master_uuid_old))
+         {
+           free(master_uuid_old);
+         }
+         master_uuid_old = strdup(master_uuid);
+         free(master_uuid);
+         master_uuid = strdup(master_uuid_new);
+         switched=true;
+       }
+     }
+     free(master_uuid_new);
+     master_uuid_new=0;
+  }
+  else
+  {
+    //todo log here.
+    error("get master uuid failed:%i,%s",mysql_errno(mysql),mysql_error(mysql));
+  }
+  mysql_free_result(res);
+
+  return OK_CONTINUE;
+}
+
+
+
+/**
+ * There are two conditions.
+ * -- read binlog error,master does not change,
+ * -- read binlog error,master was changed.
+ */
 
 
