@@ -60,10 +60,7 @@ static void warning(const char *format, ...)
 using std::min;
 using std::max;
 
-/*
-  Map containing the names of databases to be rewritten,
-  to a different one.
-*/
+static FILE *binary_log_index_file;
 
 
 /**
@@ -193,6 +190,7 @@ Sid_map *global_sid_map= NULL;
 Checkable_rwlock *global_sid_lock= NULL;
 Gtid_set *gtid_set_included= NULL;
 Gtid_set *gtid_set_excluded= NULL;
+
 
 /**
   Pointer to the Format_description_log_event of the currently active binlog.
@@ -648,10 +646,10 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
   uchar *command_buffer= NULL;
   size_t command_size= 0;
   ulong len= 0;
-  bool recovery_mode =false;
-  char new_binlog_file_name[FN_REFLEN + 1];
+
+
   unsigned long int total_bytes=0;
-  unsigned long int re_connect_start_position;
+
   size_t tlen = strlen(logname);
   size_t BINLOG_NAME_INFO_SIZE = tlen;
 
@@ -717,7 +715,11 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
   {
     opt_remote_proto = BINLOG_DUMP_NON_GTID;
     BINLOG_NAME_INFO_SIZE = strlen(new_binlog_file_name); //新的文件
-    re_connect_start_position = (start_position > respond_pos ? start_position:respond_pos);
+    if(!re_connect_start_position)
+    {
+      re_connect_start_position = (start_position > respond_pos ? start_position:respond_pos);
+    }
+    //re_connect_start_position = (start_position > respond_pos ? start_position:respond_pos);
     binlog_file_open_mode = O_WRONLY | FAPPEND |O_BINARY ;
 
   }
@@ -835,9 +837,10 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
     my_free(command_buffer);
     return ERROR_STOP;
   }
+  re_connect_start_position = 0;
   my_free(command_buffer);
 
-
+  const char* event_buf;
   for(;;)
   {
     //recovery mode read.
@@ -854,17 +857,22 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
       }
       len--;
 
-      const char* event_buf;
       event_buf= (const char *) net->read_pos + 1;
       if(handle_repl_semi_slave_read_event((void*)binlogRelayIoParam,(char*)net->read_pos+1,len,&event_buf,&len))
       {
         error("call handle_repl_semi_slave_read_event error");
       }
       type=(Log_event_type)event_buf[EVENT_TYPE_OFFSET];
-      if((type != binary_log::ROTATE_EVENT) && (type != binary_log::FORMAT_DESCRIPTION_EVENT) )
+//      if((type != binary_log::ROTATE_EVENT) && (type != binary_log::FORMAT_DESCRIPTION_EVENT) )
+//      {
+//        error("read event error in recovery mode");
+//        return ERROR_STOP;
+//      }
+
+      if(type == binary_log::HEARTBEAT_LOG_EVENT)
       {
-        error("read event error in recovery mode");
-        return ERROR_STOP;
+        error("recovery mode ,HEARTBEAT_LOG_EVENT ");
+        continue;
       }
 
       if (!(ev= Log_event::read_log_event(event_buf,
@@ -898,19 +906,25 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
           goto normal_event;
         }
       }
-
-      if(type == binary_log::FORMAT_DESCRIPTION_EVENT )
+      else if(type == binary_log::FORMAT_DESCRIPTION_EVENT || type == binary_log:: PREVIOUS_GTIDS_LOG_EVENT)
       {
-        recovery_mode=false;
-
         delete glob_description_event;
         glob_description_event= (Format_description_log_event*) ev;
         print_event_info->common_header_len= glob_description_event->common_header_len;
         ev->temp_buf= 0;
         ev= 0;
-        break;
       }
-
+      else
+      {
+        if (!(result_file = my_fopen(new_binlog_file_name, binlog_file_open_mode,
+                                     MYF(MY_WME))))
+        {
+          error("Could not create log file '%s'", new_binlog_file_name);
+          return ERROR_STOP;
+        }
+        recovery_mode=false;
+        goto normal_event;
+      }
     }
     else
     {
@@ -943,7 +957,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
       In raw mode We only need the full event details if it is a 
       ROTATE_EVENT or FORMAT_DESCRIPTION_EVENT
     */
-    const char* event_buf;
+
     event_buf= (const char *) net->read_pos + 1;
     if(handle_repl_semi_slave_read_event((void*)binlogRelayIoParam,(char*)net->read_pos+1,len,&event_buf,&len))
     {
@@ -1064,6 +1078,27 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
                     BIN_LOG_HEADER_SIZE, MYF(MY_NABP)))
       {
         error("Could not write into log file '%s'", log_file_name);
+        return ERROR_STOP;
+      }
+      //write index file
+      if(my_fwrite(binary_log_index_file,(const uchar*)new_binlog_file_name,
+              strlen(log_file_name),MYF(MY_NABP)))
+      {
+        error("Could not write into log index file '%s'", index_file_name);
+        return ERROR_STOP;
+      }
+
+
+      if(my_fwrite(binary_log_index_file,(const uchar*)line_b,
+                   strlen(line_b),MYF(MY_NABP)))
+      {
+        error("Could not write into log index file '%s'", index_file_name);
+        return ERROR_STOP;
+      }
+
+      if(fflush(binary_log_index_file))
+      {
+        //todo log here
         return ERROR_STOP;
       }
 
@@ -1239,6 +1274,8 @@ int main(int argc, char** argv)
   binlog_file_open_mode = O_WRONLY | O_BINARY;
   respond_pos = 0;
   switched = false;
+  recovery_mode =false;
+  re_connect_start_position=0;
 
 
   if (gtid_client_init())
@@ -1249,7 +1286,7 @@ int main(int argc, char** argv)
 
   umask(((~my_umask) & 0666));
   /* Check for argument conflicts and do any post-processing */
-//  if (args_post_process() == ERROR_STOP)
+//  if (determine_dump_mode() == ERROR_STOP)
 //    exit(1);
 
   opt_server_id_mask = (opt_server_id_bits == 32)?
@@ -1267,16 +1304,18 @@ int main(int argc, char** argv)
                                       my_tmpdir(&tmpdir), MY_WME);
   }
 
-
-  if (args_post_process() == ERROR_STOP)
+  if(open_index_file() == ERROR_STOP)
   {
     return 1;
   }
 
-  /*
-    In case '--idempotent' or '-i' options has been used, we will notify the
-    server to use idempotent mode for the following events.
-   */
+  if (determine_dump_mode() == ERROR_STOP)
+  {
+    return 1;
+  }
+
+
+
   retval= dump_multiple_logs(argc, argv);
 
   /*
@@ -1297,7 +1336,7 @@ int main(int argc, char** argv)
   my_end(my_end_arg | MY_DONT_FREE_DBUG);
   gtid_client_cleanup();
 
-  exit(retval == ERROR_STOP ? 1 : 0);
+  //exit(retval == ERROR_STOP ? 1 : 0);
   /* Keep compilers happy. */
   DBUG_RETURN(retval == ERROR_STOP ? 1 : 0);
 }
@@ -1496,9 +1535,9 @@ char* string_to_char(string str)
 }
 
 
-int args_post_process(void)
+Exit_status determine_dump_mode()
 {
-  DBUG_ENTER("args_post_process");
+  DBUG_ENTER("determine_dump_mode");
 
 //  if (output_file)
 //  {
@@ -1530,7 +1569,13 @@ int args_post_process(void)
           //todo log here
           perror("mkdir");
           error("create binlog_dir failed");
+          return ERROR_STOP;
         }
+      }
+
+      if(like_reset_slave() == ERROR_STOP)
+      {
+        return ERROR_STOP;
       }
 
       break;
@@ -1567,6 +1612,11 @@ int args_post_process(void)
       mysql_free_result(res);
       mysql_close(mysql);
       binlog_file_open_mode = O_WRONLY | O_BINARY;
+
+      if(like_reset_slave() == ERROR_STOP)
+      {
+        return ERROR_STOP;
+      }
       break;
     }
 
@@ -1574,8 +1624,12 @@ int args_post_process(void)
     {
       //2:decide by last file and pos in binlog_dir;appending
       opt_remote_proto = BINLOG_DUMP_NON_GTID;
-      error("not supported");
-      return ERROR_STOP;
+      if(search_last_file_position() != OK_CONTINUE)
+      {
+        error("not supported");
+        return ERROR_STOP;
+      }
+
       break;
     }
 
@@ -1708,3 +1762,151 @@ Exit_status get_master_uuid()
  */
 
 
+/**
+ *
+ * @return
+ */
+Exit_status open_index_file()
+{
+  if(chdir(output_file))
+  {
+    error("change dir failed %s",output_file);
+    return ERROR_STOP;
+  }
+  error("current dir %s",getcwd(NULL,0));
+
+  if(!index_file_name)
+  {
+    // @todo log here.
+    error("index file name is not setted");
+  }
+
+  if(!(binary_log_index_file = my_fopen(index_file_name, O_RDWR| FAPPEND,
+                                        MYF(MY_WME))))
+  {
+    error("Could not create log file '%s'", index_file_name);
+    return ERROR_STOP;
+  }
+
+
+  return OK_CONTINUE;
+}
+
+/**
+ * the func is invoked in these situation.
+ * 1.start up
+ * 2.binlog rotate
+ * @return
+ */
+Exit_status purge_binlog_file()
+{
+  return OK_CONTINUE;
+}
+
+Exit_status search_last_file_position()
+{
+  fseek(binary_log_index_file,0,SEEK_END);
+  char current_file[FN_REFLEN+1];
+  char last_log_file_name[FN_REFLEN+1];
+  char event_buffer[50];
+  Log_event *ev= NULL;
+  Log_event_type type;
+  const char *error_msg= NULL;
+  unsigned long long last_pos=0;
+
+  if(!ftell(binary_log_index_file)) //There is no binary logfile.change get_start_gtid_mode.
+  {
+    get_start_gtid_mode=1;
+    return determine_dump_mode();
+  }
+
+  fseek(binary_log_index_file,0,SEEK_SET);
+  glob_description_event= new Format_description_log_event(3);
+  while(fgets(current_file,FN_REFLEN+1,binary_log_index_file)){}
+
+  //Assume that the last binary log is net over.(has a complete xid event)
+  FILE* last_file = my_fopen(current_file, O_RDWR|O_BINARY| FAPPEND,MYF(MY_WME));
+  if(last_file)
+  {
+    fseek(last_file,-31,SEEK_END);
+  }
+
+  int read_len=my_fread(last_file,(uchar*)event_buffer,50,MYF(MY_WME));
+
+  type = (Log_event_type)event_buffer[EVENT_TYPE_OFFSET];
+
+  if(type ==  binary_log::XID_EVENT)
+  {
+    memcpy(&last_pos, event_buffer + LOG_POS_OFFSET, 4);
+  }
+
+//  if(type ==  binary_log::XID_EVENT)
+//  {
+//    if (!(ev= Log_event::read_log_event(event_buffer,
+//                                        read_len, &error_msg,
+//                                        glob_description_event,
+//                                        opt_verify_binlog_checksum)))
+//    {
+//      error("Could not construct log event object: %s", error_msg);
+//      return ERROR_STOP;
+//    }
+//    else
+//    {
+//      ev->register_temp_buf((char*)event_buffer);
+//      last_pos = ev->common_header->log_pos;
+//      reset_temp_buf_and_delete(ev);
+//    }
+//  }
+
+  if(last_pos)
+  {
+//    for(unsigned int off_set=strlen(output_file),start =0 ;off_set++,start++;off_set < strlen(current_file))
+//    {
+//      current_file[start] = current_file[off_set];
+//      current_file[off_set] = '\0';
+//    }
+    re_connect_start_position = last_pos;
+    strcpy(new_binlog_file_name,current_file);
+    binlog_file_open_mode = O_WRONLY | FAPPEND |O_BINARY ;
+    recovery_mode =true;
+
+  }
+  else
+  {
+    //rewrite last binlog file.
+    re_connect_start_position=4;
+    strcpy(new_binlog_file_name,current_file);
+    binlog_file_open_mode = O_WRONLY |O_BINARY ;
+  }
+
+
+  return OK_CONTINUE;
+}
+
+Exit_status like_reset_slave()
+{
+//  if(!(binary_log_index_file = my_fopen(index_file_name, O_RDWR| FAPPEND| O_CREAT,
+//                                        MYF(MY_WME))))
+//  {
+//    error("Could not create log file '%s'", index_file_name);
+//    return ERROR_STOP;
+//  }
+  fseek(binary_log_index_file,SEEK_SET,0);
+  char current_file[FN_REFLEN+1];
+  while(fgets(current_file,FN_REFLEN+1,binary_log_index_file))
+  {
+    if(current_file[strlen(current_file)-1] == '\n')
+    {
+      current_file[strlen(current_file)-1] = '\0';
+    }
+    if(remove(current_file) !=0 )
+    {
+      //todo log here
+      error("reset slave error remove file:%s",current_file);
+    }
+  }
+
+  //clear index file
+  ftruncate(fileno(binary_log_index_file),SEEK_SET);
+  return OK_CONTINUE;
+}

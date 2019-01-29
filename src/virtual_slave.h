@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 
 char* report_host = strdup("127.0.0.1");
@@ -20,6 +21,9 @@ uint get_start_gtid_mode;
 uint net_read_time_out;
 int binlog_file_open_mode;
 unsigned long long respond_pos;
+unsigned long int re_connect_start_position;
+char new_binlog_file_name[FN_REFLEN + 1];
+bool recovery_mode;
 
 char* master_uuid_old = 0;
 char* master_uuid = 0;
@@ -32,6 +36,10 @@ int set_slave_uuid(MYSQL* mysql);
 char* string_to_char(string str);
 extern bool semi_sync_need_reply;
 
+char* index_file_name = strdup("virtual_slave-bin.index");
+File index_file_fd;
+
+char* line_b = strdup("\n");
 enum Exit_status {
     /** No error occurred and execution should continue. */
             OK_CONTINUE= 0,
@@ -42,12 +50,18 @@ enum Exit_status {
 };
 
 
-int args_post_process(void);
-
+Exit_status determine_dump_mode();
 
 Exit_status get_master_uuid();
 Exit_status get_executed_gtid();
 Exit_status set_gtid_executed();
 
+Exit_status open_index_file();
+
+Exit_status purge_binlog_file();
+
+Exit_status search_last_file_position();
+
+Exit_status like_reset_slave();
 
 #endif //MYSQL_VIRTUAL_SLAVE_H
