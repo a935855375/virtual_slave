@@ -4,12 +4,13 @@
 
 #ifndef MYSQL_VIRTUAL_SLAVE_H
 #define MYSQL_VIRTUAL_SLAVE_H
-#include <mysql/mysql.h>
+#include "mysql.h"
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include "mysqld_error.h"
 
 
 char* report_host = strdup("127.0.0.1");

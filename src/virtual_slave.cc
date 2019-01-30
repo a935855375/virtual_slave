@@ -486,7 +486,7 @@ static Exit_status dump_multiple_logs(int argc, char **argv)
   start_position= BIN_LOG_HEADER_SIZE;
   if((rc = dump_single_log(&print_event_info,start_binlog_file)) != OK_CONTINUE)
   {
-    error("dump single log error");
+    error("Dump remote log error");
   }
 
   if (!buff_ev->empty())
@@ -850,7 +850,11 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
       if (len == packet_error)
       {
 
-        error("Got error reading packet from server: %s", mysql_error(mysql));
+        error("Got error reading packet from server: %s,%i", mysql_error(mysql),mysql_errno(mysql));
+        if(mysql_errno(mysql) == ER_MASTER_FATAL_ERROR_READING_BINLOG)
+        {
+          return ERROR_STOP;
+        }
         recovery_mode=true;
 
         goto vs_reconnect;
@@ -1012,8 +1016,8 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
 
       if (output_file != 0)
       {
-        my_snprintf(log_file_name, sizeof(log_file_name), "%s%s",
-                    output_file, rev->new_log_ident);
+        my_snprintf(log_file_name, sizeof(log_file_name), "%s",
+                    rev->new_log_ident);
         memset(new_binlog_file_name,0,(FN_REFLEN + 1));
         my_stpcpy(new_binlog_file_name, rev->new_log_ident);
       }
@@ -1259,13 +1263,16 @@ int main(int argc, char** argv)
 
   heartbeat_period = virtual_slave_config.Read("heartbeat_period",0);
   net_read_time_out = virtual_slave_config.Read("net_read_time_out",0);
-  int _int_opt_remote_proto = virtual_slave_config.Read("opt_remote_proto",_int_opt_remote_proto);
-  opt_remote_proto = (enum_remote_proto)_int_opt_remote_proto;
+//  int _int_opt_remote_proto = virtual_slave_config.Read("opt_remote_proto",_int_opt_remote_proto);
+//  opt_remote_proto = (enum_remote_proto)_int_opt_remote_proto;
+//  opt_remote_proto = 1;
 
   get_start_gtid_mode = virtual_slave_config.Read("get_start_gtid_mode",0);
   connection_server_id = virtual_slave_config.Read("virtual_slave_server_id",0);
-  raw_mode = virtual_slave_config.Read("raw_mode",0);
-  stop_never = virtual_slave_config.Read("stop_never",0);
+//  raw_mode = virtual_slave_config.Read("raw_mode",0);
+  raw_mode = 1;
+//  stop_never = virtual_slave_config.Read("stop_never",0);
+  stop_never = 1;
 
   string _s_output_file = virtual_slave_config.Read("binlog_dir",_s_output_file);
   output_file = string_to_char(_s_output_file);
@@ -1539,15 +1546,6 @@ Exit_status determine_dump_mode()
 {
   DBUG_ENTER("determine_dump_mode");
 
-//  if (output_file)
-//  {
-//    if (!(result_file = my_fopen(output_file, O_WRONLY | O_BINARY, MYF(MY_WME))))
-//    {
-//      error("Could not create log file '%s'", output_file);
-//      DBUG_RETURN(ERROR_STOP);
-//    }
-//  }
-
   switch(get_start_gtid_mode)
   {
     case 0:
@@ -1807,11 +1805,11 @@ Exit_status search_last_file_position()
 {
   fseek(binary_log_index_file,0,SEEK_END);
   char current_file[FN_REFLEN+1];
-  char last_log_file_name[FN_REFLEN+1];
+  // char last_log_file_name[FN_REFLEN+1];
   char event_buffer[50];
-  Log_event *ev= NULL;
+  //Log_event *ev= NULL;
   Log_event_type type;
-  const char *error_msg= NULL;
+//  const char *error_msg= NULL;
   unsigned long long last_pos=0;
 
   if(!ftell(binary_log_index_file)) //There is no binary logfile.change get_start_gtid_mode.
@@ -1824,6 +1822,11 @@ Exit_status search_last_file_position()
   glob_description_event= new Format_description_log_event(3);
   while(fgets(current_file,FN_REFLEN+1,binary_log_index_file)){}
 
+  if(current_file[strlen(current_file)-1] == '\n')
+  {
+    current_file[strlen(current_file)-1] ='\0';
+  }
+
   //Assume that the last binary log is net over.(has a complete xid event)
   FILE* last_file = my_fopen(current_file, O_RDWR|O_BINARY| FAPPEND,MYF(MY_WME));
   if(last_file)
@@ -1832,6 +1835,11 @@ Exit_status search_last_file_position()
   }
 
   int read_len=my_fread(last_file,(uchar*)event_buffer,50,MYF(MY_WME));
+  if(read_len == -1)
+  {
+    error("read last binlog file error");
+    return ERROR_STOP;
+  }
 
   type = (Log_event_type)event_buffer[EVENT_TYPE_OFFSET];
 
@@ -1869,6 +1877,7 @@ Exit_status search_last_file_position()
     strcpy(new_binlog_file_name,current_file);
     binlog_file_open_mode = O_WRONLY | FAPPEND |O_BINARY ;
     recovery_mode =true;
+    result_file = last_file;
 
   }
   else
