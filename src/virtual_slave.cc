@@ -121,6 +121,8 @@ ulong opt_binlog_rows_event_max_size;
 uint test_flags = 0; 
 static uint opt_protocol= 0;
 static FILE *result_file;
+int result_file_no;
+
 
 #ifndef DBUG_OFF
 //static const char* default_dbug_option = "d:t:o,/tmp/mysqlbinlog.trace";
@@ -1076,6 +1078,8 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
         error("Could not create log file '%s'", log_file_name);
         return ERROR_STOP;
       }
+      result_file_no = fileno(result_file);
+
       DBUG_EXECUTE_IF("simulate_result_file_write_error_for_FD_event",
                       DBUG_SET("+d,simulate_fwrite_error"););
       if (my_fwrite(result_file, (const uchar*) BINLOG_MAGIC,
@@ -1084,6 +1088,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
         error("Could not write into log file '%s'", log_file_name);
         return ERROR_STOP;
       }
+      //setbuf(result_file,NULL);
       //write index file
       if(my_fwrite(binary_log_index_file,(const uchar*)new_binlog_file_name,
               strlen(log_file_name),MYF(MY_NABP)))
@@ -1159,12 +1164,14 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
 
     if(semi_sync_need_reply)
     {
-      if(fsync(fileno(result_file)))
+      if(fsync(result_file_no))
       {
         //@todo log here.
         return ERROR_STOP;
       }
     }
+
+    //必须先将事务落盘，再做ack。
     handle_repl_semi_slave_queue_event((void*)binlogRelayIoParam,event_buf,0,0);
 
   }
