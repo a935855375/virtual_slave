@@ -49,7 +49,7 @@ git glone https://github.com/sunashe/virtual_slave.git
 配置文件超级简单。
 
 ```$xslt
-#mode for get binlog file and position when start virtual_slave.
+#virtual_slave同步binlog模式，0/1 GTID; 2 binlog file+pos.
 #0:decide by exclude_gtids(clean binlog_dir);
 #1:decide by "show master status"(clean binlog_dir);
 #2:decide by last file and pos in binlog_dir;
@@ -66,7 +66,10 @@ master_password=ashe
 #binlog的目录
 binlog_dir=/data/binlog_backup
 
+#心跳间隔
 heartbeat_period = 5
+
+#网络超时时间，要大于心跳间隔，不然在写入低峰期virtual_slave会尝试重连。
 net_read_time_out = 10
 ```
 
