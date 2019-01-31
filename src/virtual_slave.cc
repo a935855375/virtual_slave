@@ -33,6 +33,7 @@ using std::string;
 #include "prealloced_array.h"
 #include "virtual_slave.h"
 #include "Config/Config.h"
+#include "log/log.h"
 
 /*
   error() is used in macro BINLOG_ERROR which is invoked in
@@ -283,20 +284,6 @@ static void error(const char *format,...)
 
 
 /**
-  This function is used in log_event.cc to report errors.
-
-  @param format Printf-style format string, followed by printf
-  varargs.
-*/
-static void sql_print_error(const char *format,...)
-{
-  va_list args;
-  va_start(args, format);
-  error_or_warning(format, args, "ERROR");
-  va_end(args);
-}
-
-/**
   Prints a message to stderr, prefixed with the text "WARNING: " and
   suffixed with a newline.
 
@@ -386,7 +373,7 @@ static Exit_status safe_connect()
 
   if (!mysql)
   {
-    error("Failed on mysql_init.");
+    sql_print_warning("Failed on mysql_init.");
     return ERROR_STOP;
   }
 
@@ -419,7 +406,7 @@ static Exit_status safe_connect()
 
   if (!mysql_real_connect(mysql, host, user, pass, 0, port, sock, 0))
   {
-    error("Failed on connect: %s", mysql_error(mysql));
+    sql_print_error("Failed on connect: %s", mysql_error(mysql));
     return ERROR_STOP;
   }
   mysql->reconnect= 1;
@@ -488,11 +475,11 @@ static Exit_status dump_multiple_logs(int argc, char **argv)
   start_position= BIN_LOG_HEADER_SIZE;
   if((rc = dump_single_log(&print_event_info,start_binlog_file)) != OK_CONTINUE)
   {
-    error("Dump remote log error");
+    sql_print_error("Dump remote log error");
   }
 
   if (!buff_ev->empty())
-    warning("The range of printed events ends with an Intvar_event, "
+    sql_print_warning("The range of printed events ends with an Intvar_event, "
             "Rand_event or User_var_event with no matching Query_log_event. "
             "This might be because the last statement was not fully written "
             "to the log, or because you are using a --stop-position or "
@@ -501,7 +488,7 @@ static Exit_status dump_multiple_logs(int argc, char **argv)
             "written to output. ");
 
   else if (print_event_info.have_unflushed_events)
-    warning("The range of printed events ends with a row event or "
+    sql_print_warning("The range of printed events ends with a row event or "
             "a table map event that does not have the STMT_END_F "
             "flag set. This might be because the last statement "
             "was not fully written to the log, or because you are "
@@ -534,20 +521,20 @@ static Exit_status check_master_version()
   if (mysql_query(mysql, "SELECT VERSION()") ||
       !(res = mysql_store_result(mysql)))
   {
-    error("Could not find server version: "
+    sql_print_error("Could not find server version: "
           "Query failed when checking master version: %s", mysql_error(mysql));
     DBUG_RETURN(ERROR_STOP);
   }
   if (!(row = mysql_fetch_row(res)))
   {
-    error("Could not find server version: "
+    sql_print_error("Could not find server version: "
           "Master returned no rows for SELECT VERSION().");
     goto err;
   }
 
   if (!(version = row[0]))
   {
-    error("Could not find server version: "
+    sql_print_error("Could not find server version: "
           "Master reported NULL for the version.");
     goto err;
   }
@@ -559,7 +546,7 @@ static Exit_status check_master_version()
   */
   if (mysql_query(mysql, "SET @master_binlog_checksum='NONE'"))
   {
-    error("Could not notify master about checksum awareness."
+    sql_print_error("Could not notify master about checksum awareness."
           "Master returned '%s'", mysql_error(mysql));
     goto err;
   }
@@ -582,13 +569,13 @@ static Exit_status check_master_version()
     break;
   default:
     glob_description_event= NULL;
-    error("Could not find server version: "
+    sql_print_error("Could not find server version: "
           "Master reported unrecognized MySQL version '%s'.", version);
     goto err;
   }
   if (!glob_description_event || !glob_description_event->is_valid())
   {
-    error("Failed creating Format_description_log_event; out of memory?");
+    sql_print_error("Failed creating Format_description_log_event; out of memory?");
     goto err;
   }
 
@@ -648,13 +635,9 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
   uchar *command_buffer= NULL;
   size_t command_size= 0;
   ulong len= 0;
-
-
   unsigned long int total_bytes=0;
-
   size_t tlen = strlen(logname);
   size_t BINLOG_NAME_INFO_SIZE = tlen;
-
  // size_t logname_len= 0;
   uint server_id= 0;
   NET* net= NULL;
@@ -663,14 +646,13 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
   char log_file_name[FN_REFLEN + 1];
   Exit_status retval= OK_CONTINUE;
   enum enum_server_command command= COM_END;
-
 //  fname[0]= log_file_name[0]= 0;
   log_file_name[0]= 0;
 
 
   if (tlen > UINT_MAX)
   {
-    error("Log name too long.");
+    sql_print_error("Log name too long.");
     return ERROR_STOP;
   }
 
@@ -726,12 +708,10 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
 
   }
 
-
   if (connection_server_id != -1)
   {
     server_id= static_cast<uint>(connection_server_id);
   }
-
 
   binlogRelayIoParam = new Binlog_relay_IO_param;
   binlogRelayIoParam->channel_name=strdup("test");
@@ -745,17 +725,13 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
 
   if(handle_repl_semi_slave_request_dump((void*)binlogRelayIoParam,0))
   {
-    error("call repl_semi_slave_request_dump error");
+    sql_print_error("call repl_semi_slave_request_dump error");
   }
-
-
 
   if (opt_remote_proto == BINLOG_DUMP_NON_GTID)
   {
     bool suppress_warnings;
     register_slave_on_master(mysql,&suppress_warnings);
-
-
     command= COM_BINLOG_DUMP;
     size_t allocation_size= ::BINLOG_POS_OLD_INFO_SIZE +
       BINLOG_NAME_INFO_SIZE + ::BINLOG_FLAGS_INFO_SIZE +
@@ -763,7 +739,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
     if (!(command_buffer= (uchar *) my_malloc(PSI_NOT_INSTRUMENTED,
                                               allocation_size, MYF(MY_WME))))
     {
-      error("Got fatal error allocating memory.");
+      sql_print_error("Got fatal error allocating memory.");
       return ERROR_STOP;
     }
     uchar* ptr_buffer= command_buffer;
@@ -792,8 +768,6 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
     command= COM_BINLOG_DUMP_GTID;
     char real_log_name[]="";
     BINLOG_NAME_INFO_SIZE= strlen(real_log_name);
-
-
     global_sid_lock->rdlock();
 
     // allocate buffer
@@ -807,7 +781,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
     if (!(command_buffer= (uchar *) my_malloc(PSI_NOT_INSTRUMENTED,
                                               allocation_size, MYF(MY_WME))))
     {
-      error("Got fatal error allocating memory.");
+      sql_print_error("Got fatal error allocating memory.");
       global_sid_lock->unlock();
       return ERROR_STOP;
     }
@@ -835,7 +809,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
 
   if (simple_command(mysql, command, command_buffer, command_size, 1))
   {
-    error("Got fatal error sending the log dump command.");
+    sql_print_information("Got fatal error sending the log dump command.");
     my_free(command_buffer);
     return ERROR_STOP;
   }
@@ -851,8 +825,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
       len = cli_safe_read(mysql, NULL);
       if (len == packet_error)
       {
-
-        error("Got error reading packet from server: %s,%i", mysql_error(mysql),mysql_errno(mysql));
+        sql_print_error("Got error reading packet from server: %s,%i", mysql_error(mysql),mysql_errno(mysql));
         if(mysql_errno(mysql) == ER_MASTER_FATAL_ERROR_READING_BINLOG)
         {
           return ERROR_STOP;
@@ -866,18 +839,12 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
       event_buf= (const char *) net->read_pos + 1;
       if(handle_repl_semi_slave_read_event((void*)binlogRelayIoParam,(char*)net->read_pos+1,len,&event_buf,&len))
       {
-        error("call handle_repl_semi_slave_read_event error");
+        sql_print_error("call handle_repl_semi_slave_read_event error");
       }
       type=(Log_event_type)event_buf[EVENT_TYPE_OFFSET];
-//      if((type != binary_log::ROTATE_EVENT) && (type != binary_log::FORMAT_DESCRIPTION_EVENT) )
-//      {
-//        error("read event error in recovery mode");
-//        return ERROR_STOP;
-//      }
-
       if(type == binary_log::HEARTBEAT_LOG_EVENT)
       {
-        error("recovery mode ,HEARTBEAT_LOG_EVENT ");
+        sql_print_information("recovery mode,received HEARTBEAT log event");
         continue;
       }
 
@@ -886,7 +853,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
                                           glob_description_event,
                                           opt_verify_binlog_checksum)))
       {
-        error("Could not construct log event object: %s", error_msg);
+        sql_print_error("Could not construct log event object in reconnect mode: %s,event len: %lu", error_msg,len);
         return ERROR_STOP;
       }
       /*
@@ -925,7 +892,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
         if (!(result_file = my_fopen(new_binlog_file_name, binlog_file_open_mode,
                                      MYF(MY_WME))))
         {
-          error("Could not create log file '%s'", new_binlog_file_name);
+          sql_print_error("Could not create log file '%s'", new_binlog_file_name);
           return ERROR_STOP;
         }
         recovery_mode=false;
@@ -944,15 +911,14 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
     len = cli_safe_read(mysql, NULL);
     if (len == packet_error)
     {
-
-      error("Got error reading packet from server: %s", mysql_error(mysql));
+      sql_print_error("Got error reading packet from server: %i,%s", mysql_errno(mysql),mysql_error(mysql));
       recovery_mode=true;
       goto vs_reconnect;
     }
     len--;
     if (len < 8 && net->read_pos[0] == 254)
     {
-      error("Got error reading packet from server: %s",mysql_error(mysql));
+      sql_print_error("Got error reading packet from server: %i,%s",mysql_errno(mysql),mysql_error(mysql));
       recovery_mode=true;
       goto vs_reconnect;
     }
@@ -967,13 +933,13 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
     event_buf= (const char *) net->read_pos + 1;
     if(handle_repl_semi_slave_read_event((void*)binlogRelayIoParam,(char*)net->read_pos+1,len,&event_buf,&len))
     {
-      error("call handle_repl_semi_slave_read_event error");
+      sql_print_error("call handle_repl_semi_slave_read_event error");
     }
     type=(Log_event_type)event_buf[EVENT_TYPE_OFFSET];
 
     if (type == binary_log::HEARTBEAT_LOG_EVENT)
     {
-      error("received HEARTBEAT_LOG_EVENT");
+      sql_print_information("received HEARTBEAT log event");
       continue;
     }
 
@@ -983,7 +949,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
                                         glob_description_event,
                                         opt_verify_binlog_checksum)))
     {
-      error("Could not construct log event object: %s", error_msg);
+      sql_print_error("Could not construct log event object: %s", error_msg);
       return ERROR_STOP;
     }
     /*
@@ -1075,7 +1041,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
       if (!(result_file = my_fopen(log_file_name, binlog_file_open_mode,
                                    MYF(MY_WME))))
       {
-        error("Could not create log file '%s'", log_file_name);
+        sql_print_error("Could not create log file '%s'", log_file_name);
         return ERROR_STOP;
       }
       result_file_no = fileno(result_file);
@@ -1085,7 +1051,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
       if (my_fwrite(result_file, (const uchar*) BINLOG_MAGIC,
                     BIN_LOG_HEADER_SIZE, MYF(MY_NABP)))
       {
-        error("Could not write into log file '%s'", log_file_name);
+        sql_print_error("Could not write into log file '%s'", log_file_name);
         return ERROR_STOP;
       }
       //setbuf(result_file,NULL);
@@ -1093,7 +1059,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
       if(my_fwrite(binary_log_index_file,(const uchar*)new_binlog_file_name,
               strlen(log_file_name),MYF(MY_NABP)))
       {
-        error("Could not write into log index file '%s'", index_file_name);
+        sql_print_error("Could not write into log index file '%s'", index_file_name);
         return ERROR_STOP;
       }
 
@@ -1101,13 +1067,14 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
       if(my_fwrite(binary_log_index_file,(const uchar*)line_b,
                    strlen(line_b),MYF(MY_NABP)))
       {
-        error("Could not write into log index file '%s'", index_file_name);
+        sql_print_error("Could not write into log index file '%s'", index_file_name);
         return ERROR_STOP;
       }
 
       if(fflush(binary_log_index_file))
       {
         //todo log here
+        sql_print_error("fflush binary log index file %s failed",index_file_name);
         return ERROR_STOP;
       }
 
@@ -1127,14 +1094,14 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
     if (type == binary_log::LOAD_EVENT)
     {
       DBUG_ASSERT(raw_mode);
-      warning("Attempting to load a remote pre-4.0 binary log that contains "
+      sql_print_warning("Attempting to load a remote pre-4.0 binary log that contains "
               "LOAD DATA INFILE statements. The file will not be copied from "
               "the remote server. ");
     }
 
     if (my_fwrite(result_file, (const uchar*)event_buf, len, MYF(MY_NABP)))
     {
-      error("Could not write into log file '%s'", log_file_name);
+      sql_print_error("Could not write into log file '%s'", log_file_name);
       retval= ERROR_STOP;
     }
     total_bytes += len;
@@ -1158,7 +1125,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
     //flush or flush+sync binlog file befor replay ack=
     if(fflush(result_file))
     {
-      //todo log here
+      sql_print_error("fflush file %s failed",log_file_name);
       return ERROR_STOP;
     }
 
@@ -1166,7 +1133,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
     {
       if(fsync(result_file_no))
       {
-        //@todo log here.
+        sql_print_error("Sync file %s failed",log_file_name);
         return ERROR_STOP;
       }
     }
@@ -1224,11 +1191,6 @@ int main(int argc, char** argv)
   MY_INIT(argv[0]);
   DBUG_ENTER("main");
   DBUG_PROCESS(argv[0]);
-  if(symisync_slave_init())
-  {
-    error("init semisync_slave error");
-    return 1;
-  }
 
   my_init_time(); // for time functions
   tzset(); // set tzname
@@ -1241,16 +1203,9 @@ int main(int argc, char** argv)
   */
   buff_ev= new Buff_ev(PSI_NOT_INSTRUMENTED);
 
-//  my_getopt_use_args_separator= TRUE;
-//  if (load_defaults("my", load_default_groups, &argc, &argv))
-//    exit(1);
-//  my_getopt_use_args_separator= FALSE;
-//  defaults_argv= argv;
-//
-//  parse_args(&argc, &argv);
   if(argc != 2)
   {
-    error("There are too many parameters.\nusage: virtual_slave virtual_slave.cnf");
+    std::cout << ("Wrong usage.\nusage: virtual_slave virtual_slave.cnf") << std::endl;
     exit(1);
   }
 
@@ -1270,31 +1225,38 @@ int main(int argc, char** argv)
 
   heartbeat_period = virtual_slave_config.Read("heartbeat_period",0);
   net_read_time_out = virtual_slave_config.Read("net_read_time_out",0);
-//  int _int_opt_remote_proto = virtual_slave_config.Read("opt_remote_proto",_int_opt_remote_proto);
-//  opt_remote_proto = (enum_remote_proto)_int_opt_remote_proto;
-//  opt_remote_proto = 1;
 
   get_start_gtid_mode = virtual_slave_config.Read("get_start_gtid_mode",0);
   connection_server_id = virtual_slave_config.Read("virtual_slave_server_id",0);
-//  raw_mode = virtual_slave_config.Read("raw_mode",0);
   raw_mode = 1;
-//  stop_never = virtual_slave_config.Read("stop_never",0);
   stop_never = 1;
 
   string _s_output_file = virtual_slave_config.Read("binlog_dir",_s_output_file);
   output_file = string_to_char(_s_output_file);
   string _s_opt_exclude_gtids_str = virtual_slave_config.Read("exclude_gtids",_s_opt_exclude_gtids_str);
   opt_exclude_gtids_str = strdup(_s_opt_exclude_gtids_str.data());
+  char* log_file = strdup("virtual_slave.log");
+
   binlog_file_open_mode = O_WRONLY | O_BINARY;
   respond_pos = 0;
   switched = false;
   recovery_mode =false;
   re_connect_start_position=0;
 
+  if(prepare_log_file(log_file) != OK_CONTINUE)
+  {
+    return 1;
+  }
+
+  if(symisync_slave_init())
+  {
+    sql_print_error("init semisync_slave plugin error");
+    return 1;
+  }
 
   if (gtid_client_init())
   {
-    error("Could not initialize GTID structuress.");
+    sql_print_error("Could not initialize GTID structuress.");
     exit(1);
   }
 
@@ -1327,24 +1289,18 @@ int main(int argc, char** argv)
   {
     return 1;
   }
-
-
-
   retval= dump_multiple_logs(argc, argv);
-
-  /*
-    We should unset the RBR_EXEC_MODE since the user may concatenate output of
-    multiple runs of mysqlbinlog, all of which may not run in idempotent mode.
-   */
-
   if (tmpdir.list)
+  {
     free_tmpdir(&tmpdir);
+  }
+
   if (result_file && (result_file != stdout))
+  {
     my_fclose(result_file, MYF(0));
+  }
   cleanup();
 
-//  if (defaults_argv)
-//    free_defaults(defaults_argv);
   my_free_open_file_info();
   /* We cannot free DBUG, it is used in global destructors after exit(). */
   my_end(my_end_arg | MY_DONT_FREE_DBUG);
@@ -1422,11 +1378,10 @@ int register_slave_on_master(MYSQL* mysql,/* Master_info *mi,*/
   if (report_host_len > HOSTNAME_LENGTH)
   {
     // todo log here
-//    sql_print_warning("The length of report_host is %zu. "
-//                              "It is larger than the max length(%d), so this "
-//                              "slave cannot be registered to the master%s.",
-//                      report_host_len, HOSTNAME_LENGTH,
-//                      mi->get_for_channel_str());
+    sql_print_warning("The length of report_host is %zu. "
+                              "It is larger than the max length(%d), so this "
+                              "slave cannot be registered to the master",
+                      report_host_len, HOSTNAME_LENGTH);
     DBUG_RETURN(0);
   }
 
@@ -1435,10 +1390,10 @@ int register_slave_on_master(MYSQL* mysql,/* Master_info *mi,*/
   if (report_user_len > USERNAME_LENGTH)
   {
     //todo log here
-//    sql_print_warning("The length of report_user is %zu. "
-//                              "It is larger than the max length(%d), so this "
-//                              "slave cannot be registered to the master%s.",
-//                      report_user_len, USERNAME_LENGTH, mi->get_for_channel_str());
+    sql_print_warning("The length of report_user is %zu. "
+                              "It is larger than the max length(%d), so this "
+                              "slave cannot be registered to the master.",
+                      report_user_len, USERNAME_LENGTH);
     DBUG_RETURN(0);
   }
 
@@ -1518,7 +1473,7 @@ int set_heartbeat_period(MYSQL* mysql)
   sprintf(query, query_format, llbuf);
   if(mysql_real_query(mysql,query,static_cast<ulong>(strlen(query))))
   {
-    error("%s error %s,%i",query,mysql_error(mysql),mysql_errno(mysql));
+    sql_print_error("%s error %s,%i",query,mysql_error(mysql),mysql_errno(mysql));
     return -1;
   }
   return 0;
@@ -1530,7 +1485,7 @@ int set_slave_uuid(MYSQL* mysql)
   sprintf(query,"SET @slave_uuid= '63cf7450-9829-11e7-8a58-000c2985ca33'");
   if(mysql_real_query(mysql,query,strlen(query)))
   {
-    error("%s error %s,%i",query,mysql_error(mysql),mysql_errno(mysql));
+    sql_print_error("%s error %s,%i",query,mysql_error(mysql),mysql_errno(mysql));
     delete[] query;
     return -1;
   }
@@ -1571,9 +1526,8 @@ Exit_status determine_dump_mode()
         int mk_res =  mkdir(output_file,S_IRWXU | S_IRGRP | S_IXGRP);
         if(mk_res != 0)
         {
-          //todo log here
+          sql_print_error("create binlog_dir failed");
           perror("mkdir");
-          error("create binlog_dir failed");
           return ERROR_STOP;
         }
       }
@@ -1594,14 +1548,14 @@ Exit_status determine_dump_mode()
       if (safe_connect() != OK_CONTINUE)
       {
         my_sleep(5000);
-        error("connect to master failed:%i,%s;reconnecting...",mysql_errno(mysql),mysql_error(mysql));
+        sql_print_error("connect to master failed:%i,%s;reconnecting...",mysql_errno(mysql),mysql_error(mysql));
         goto retry_connect_show_master_status;
       }
       if(mysql_real_query(mysql,
                           "show global variables like 'gtid_executed'",
                           strlen("show global variables like 'gtid_executed'"))!=0)
       {
-        error("get master GTID Executed failed:%i,%s",mysql_errno(mysql),mysql_error(mysql));
+        sql_print_error("get master GTID Executed failed:%i,%s",mysql_errno(mysql),mysql_error(mysql));
         return ERROR_STOP;
       }
       MYSQL_RES* res = mysql_store_result(mysql);
@@ -1631,7 +1585,7 @@ Exit_status determine_dump_mode()
       opt_remote_proto = BINLOG_DUMP_NON_GTID;
       if(search_last_file_position() != OK_CONTINUE)
       {
-        error("not supported");
+        sql_print_error("Search last file position from index file failed");
         return ERROR_STOP;
       }
 
@@ -1654,7 +1608,7 @@ Exit_status get_executed_gtid()
                       "show global variables like 'gtid_executed'",
                       strlen("show global variables like 'gtid_executed'"))!=0)
   {
-    error("get master GTID Executed failed:%i,%s",mysql_errno(mysql),mysql_error(mysql));
+    sql_print_error("get master GTID Executed failed:%i,%s",mysql_errno(mysql),mysql_error(mysql));
     return ERROR_STOP;
   }
   MYSQL_RES* res = mysql_store_result(mysql);
@@ -1682,7 +1636,7 @@ Exit_status set_gtid_executed()
     if (gtid_set_excluded->add_gtid_text(opt_exclude_gtids_str) !=
         RETURN_STATUS_OK)
     {
-      error("Could not configure --exclude-gtids '%s'", opt_exclude_gtids_str);
+      sql_print_error("Could not configure --exclude-gtids '%s'", opt_exclude_gtids_str);
       global_sid_lock->unlock();
       return (ERROR_STOP);
     }
@@ -1705,7 +1659,7 @@ Exit_status get_master_uuid()
                       query,
                       strlen(query))!=0)
   {
-    error("get master uuid failed:%i,%s",mysql_errno(mysql),mysql_error(mysql));
+    sql_print_error("get master uuid failed:%i,%s",mysql_errno(mysql),mysql_error(mysql));
     return ERROR_STOP;
   }
   MYSQL_RES* res = mysql_store_result(mysql);
@@ -1720,21 +1674,21 @@ Exit_status get_master_uuid()
      master_uuid_new=strdup(row[1]);
      if(!master_uuid) //get master uuid first times.
      {
-       error("connect to master first times,master_uuid:%s",master_uuid_new);
+       sql_print_information("connect to master first times,master_uuid:%s",master_uuid_new);
        master_uuid = strdup(master_uuid_new);
        switched=false;
      }
      else //get master uuid next times.
      {
-       error("reconnect to master,master_uuid:%s",master_uuid_new);
+       sql_print_information("reconnect to master,master_uuid:%s",master_uuid_new);
        if(strcasecmp(master_uuid,master_uuid_new) ==0 )
        {
-         error("M-S does not switch");
+         sql_print_information("M-S does not switch");
          switched=false;
        }
        else
        {
-         error("M-S switched");
+         sql_print_information("M-S switched");
          if(strlen(master_uuid_old))
          {
            free(master_uuid_old);
@@ -1750,8 +1704,8 @@ Exit_status get_master_uuid()
   }
   else
   {
-    //todo log here.
-    error("get master uuid failed:%i,%s",mysql_errno(mysql),mysql_error(mysql));
+    sql_print_error("get master uuid failed:%i,%s",mysql_errno(mysql),mysql_error(mysql));
+    return ERROR_STOP;
   }
   mysql_free_result(res);
 
@@ -1775,25 +1729,22 @@ Exit_status open_index_file()
 {
   if(chdir(output_file))
   {
-    error("change dir failed %s",output_file);
+    sql_print_error("change work dir to %s failed",output_file);
     return ERROR_STOP;
   }
-  error("current dir %s",getcwd(NULL,0));
+  sql_print_information("current work dir %s",getcwd(NULL,0));
 
   if(!index_file_name)
   {
-    // @todo log here.
-    error("index file name is not setted");
+    sql_print_error("index file is not setted");
   }
 
   if(!(binary_log_index_file = my_fopen(index_file_name, O_RDWR| FAPPEND,
                                         MYF(MY_WME))))
   {
-    error("Could not create log file '%s'", index_file_name);
+    sql_print_error("Could not create log file '%s'", index_file_name);
     return ERROR_STOP;
   }
-
-
   return OK_CONTINUE;
 }
 
@@ -1844,7 +1795,7 @@ Exit_status search_last_file_position()
   int read_len=my_fread(last_file,(uchar*)event_buffer,50,MYF(MY_WME));
   if(read_len == -1)
   {
-    error("read last binlog file error");
+    sql_print_error("read last binlog file error");
     return ERROR_STOP;
   }
 
@@ -1854,32 +1805,8 @@ Exit_status search_last_file_position()
   {
     memcpy(&last_pos, event_buffer + LOG_POS_OFFSET, 4);
   }
-
-//  if(type ==  binary_log::XID_EVENT)
-//  {
-//    if (!(ev= Log_event::read_log_event(event_buffer,
-//                                        read_len, &error_msg,
-//                                        glob_description_event,
-//                                        opt_verify_binlog_checksum)))
-//    {
-//      error("Could not construct log event object: %s", error_msg);
-//      return ERROR_STOP;
-//    }
-//    else
-//    {
-//      ev->register_temp_buf((char*)event_buffer);
-//      last_pos = ev->common_header->log_pos;
-//      reset_temp_buf_and_delete(ev);
-//    }
-//  }
-
   if(last_pos)
   {
-//    for(unsigned int off_set=strlen(output_file),start =0 ;off_set++,start++;off_set < strlen(current_file))
-//    {
-//      current_file[start] = current_file[off_set];
-//      current_file[off_set] = '\0';
-//    }
     re_connect_start_position = last_pos;
     strcpy(new_binlog_file_name,current_file);
     binlog_file_open_mode = O_WRONLY | FAPPEND |O_BINARY ;
@@ -1890,6 +1817,7 @@ Exit_status search_last_file_position()
   else
   {
     //rewrite last binlog file.
+    sql_print_warning("Could not find last pos in last file,overwrite the last binlog file %s",current_file);
     re_connect_start_position=4;
     strcpy(new_binlog_file_name,current_file);
     binlog_file_open_mode = O_WRONLY |O_BINARY ;
@@ -1901,12 +1829,6 @@ Exit_status search_last_file_position()
 
 Exit_status like_reset_slave()
 {
-//  if(!(binary_log_index_file = my_fopen(index_file_name, O_RDWR| FAPPEND| O_CREAT,
-//                                        MYF(MY_WME))))
-//  {
-//    error("Could not create log file '%s'", index_file_name);
-//    return ERROR_STOP;
-//  }
   fseek(binary_log_index_file,SEEK_SET,0);
   char current_file[FN_REFLEN+1];
   while(fgets(current_file,FN_REFLEN+1,binary_log_index_file))
@@ -1917,12 +1839,33 @@ Exit_status like_reset_slave()
     }
     if(remove(current_file) !=0 )
     {
-      //todo log here
-      error("reset slave error remove file:%s",current_file);
+      sql_print_warning("reset slave error remove file:%s",current_file);
     }
   }
 
   //clear index file
   ftruncate(fileno(binary_log_index_file),SEEK_SET);
   return OK_CONTINUE;
+}
+
+
+Exit_status prepare_log_file(char* log_file)
+{
+  if(chdir(output_file))
+  {
+    sql_print_error("change dir failed %s",output_file);
+    return ERROR_STOP;
+  }
+  init_error_log();
+
+  if (open_error_log(log_file))
+  {
+    sql_print_error("failed open log file: %s",log_file);
+    return ERROR_STOP;
+  }
+  else
+  {
+    return OK_CONTINUE;
+  }
+
 }

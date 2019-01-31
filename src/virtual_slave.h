@@ -11,6 +11,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include "mysqld_error.h"
+//#include "log.h"
+
 
 
 char* report_host = strdup("127.0.0.1");
@@ -30,6 +32,7 @@ char* master_uuid_old = 0;
 char* master_uuid = 0;
 char* master_uuid_new = 0;
 bool switched;
+char* log_file;
 
 int register_slave_on_master(MYSQL* mysql,bool *suppress_warnings);
 int set_heartbeat_period(MYSQL* mysql);
@@ -64,5 +67,6 @@ Exit_status purge_binlog_file();
 Exit_status search_last_file_position();
 
 Exit_status like_reset_slave();
+Exit_status prepare_log_file(char* );
 
 #endif //MYSQL_VIRTUAL_SLAVE_H

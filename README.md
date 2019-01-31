@@ -104,7 +104,8 @@ mysql> show slave hosts;
 
 
 ## binlog一致性校验
-如果在master上未设置Binlog_Do_DB/Binlog_Ignore_DB，则可以通过md5来校验binlog的一致性。
+对于每一个binlog event，在进行网络读取后已经进行了校验。
+对于单个binlog文件来讲，如果在master上未设置Binlog_Do_DB/Binlog_Ignore_DB，则可以通过md5来校验binlog的一致性。
 ```asm
 mysql> show master status;
 +------------------+----------+--------------+------------------+-------------------------------------------------+

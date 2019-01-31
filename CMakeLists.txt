@@ -60,7 +60,6 @@ INCLUDE_DIRECTORIES(
         "./src/semisync"
         "./src/"
         "src/Config"
-
 )
 
 
@@ -71,7 +70,7 @@ SET(SEMISYNC_SLAVE_SOURCES src/semisync/semisync.cc src/semisync/semisync_slave.
 add_library(semisync_slave_for_virtual_slave STATIC ${SEMISYNC_SLAVE_SOURCES})
 target_link_libraries(semisync_slave_for_virtual_slave mysqlclient)
 
-ADD_EXECUTABLE(virtual_slave src/virtual_slave.cc src/Config/Config.cc)
+ADD_EXECUTABLE(virtual_slave src/virtual_slave.cc src/Config/Config.cc src/log/log.cc)
 
 ADD_COMPILE_FLAGS(
         src/virtual_slave.cc
