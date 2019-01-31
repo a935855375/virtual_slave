@@ -48,7 +48,7 @@ static void warning(const char *format, ...)
 #include "log_event.h"
 #include "log_event_old.h"
 #include "rpl_constants.h"
-#include <mysql/sql_common.h>
+#include "sql_common.h"
 #include <mysql/my_dir.h>
 #include "welcome_copyright_notice.h" // ORACLE_WELCOME_COPYRIGHT_NOTICE
 #include "sql_string.h"
