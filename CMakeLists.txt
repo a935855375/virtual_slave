@@ -66,7 +66,7 @@ INCLUDE_DIRECTORIES(
 SET(CMAKE_MACOSX_RPATH 1)
 
 SET(SEMISYNC_SLAVE_SOURCES src/semisync/semisync.cc src/semisync/semisync_slave.cc
-        src/semisync/semisync_slave_plugin.cc src/semisync/semisync.h src/semisync/semisync_slave.h)
+        src/semisync/semisync_slave_plugin.cc src/semisync/semisync.h src/semisync/semisync_slave.h src/log/log.cc)
 add_library(semisync_slave_for_virtual_slave STATIC ${SEMISYNC_SLAVE_SOURCES})
 target_link_libraries(semisync_slave_for_virtual_slave mysqlclient)
 

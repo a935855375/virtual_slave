@@ -22,15 +22,13 @@
 #define HAVE_REPLICATION
 
 
-#include <mysql/my_global.h>
-#include <mysql/my_thread.h>
-#include <mysql/my_thread_local.h>
-#include <mysql/mysql.h>
+#include "my_global.h"
+#include "my_thread.h"
+#include "my_thread_local.h"
+#include "mysql.h"
 //#include "log.h"                                /* sql_print_information */
 #include <stdio.h>
-#define sql_print_warning printf
-#define sql_print_error printf
-#define sql_print_information printf
+#include "src/log/log.h"
 
 /**
   Replication binlog relay IO observer parameter
