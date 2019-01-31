@@ -77,6 +77,21 @@ net_read_time_out = 10
 ```$xslt
 nohup virtual_slave  /etc/123_virtual_slave.cnf &
 ```
+查看启动日志
+```asm
+cat virtual_slave.log
+2019-01-31T15:07:18.620931+08:00 0 [Note] current work dir /data/binlog_backup/100.106.30.3_13307
+2019-01-31T15:07:18.645936+08:00 0 [Note] connect to master first times,master_uuid:1c78a195-b077-11e6-9a8f-246e9601e1c8
+2019-01-31T15:07:18.646548+08:00 0 [Warning] Master server does not support semi-sync, fallback to asynchronous replication
+2019-01-31T15:07:18.648559+08:00 0 [ERROR] Got error reading packet from server: 1236,The slave is connecting using CHANGE MASTER TO MASTER_AUTO_POSITION = 1, but the master has purged binary logs containing GTIDs that the slave requires.
+2019-01-31T15:07:18.654630+08:00 0 [Note] reconnect to master,master_uuid:1c78a195-b077-11e6-9a8f-246e9601e1c8
+2019-01-31T15:07:18.654645+08:00 0 [Note] M-S does not switch
+2019-01-31T15:07:18.655107+08:00 0 [Warning] Master server does not support semi-sync, fallback to asynchronous replication
+2019-01-31T15:40:25.355271+08:00 0 [ERROR] Got error reading packet from server: 2013,Lost connection to MySQL server during query
+2019-01-31T15:40:25.373087+08:00 0 [Note] reconnect to master,master_uuid:1c78a195-b077-11e6-9a8f-246e9601e1c8
+2019-01-31T15:40:25.373126+08:00 0 [Note] M-S does not switch
+2019-01-31T15:40:25.373652+08:00 0 [Warning] Master server does not support semi-sync, fallback to asynchronous replication
+```
 
 ### master上查看
 通过show processlist可以看到dump线程。

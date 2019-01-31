@@ -32,7 +32,7 @@ char* master_uuid_old = 0;
 char* master_uuid = 0;
 char* master_uuid_new = 0;
 bool switched;
-char* log_file;
+char* virtual_slave_log_file;
 
 int register_slave_on_master(MYSQL* mysql,bool *suppress_warnings);
 int set_heartbeat_period(MYSQL* mysql);

@@ -826,11 +826,14 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
       if (len == packet_error)
       {
         sql_print_error("Got error reading packet from server: %s,%i", mysql_error(mysql),mysql_errno(mysql));
+        //maybe that master execute reset master. reset respond_pos and new_binlog_file_name.
         if(mysql_errno(mysql) == ER_MASTER_FATAL_ERROR_READING_BINLOG)
         {
-          return ERROR_STOP;
+          respond_pos = 0;
+          memset(new_binlog_file_name,0,sizeof(new_binlog_file_name));
         }
         recovery_mode=true;
+        like_reset_slave();
 
         goto vs_reconnect;
       }
@@ -1235,7 +1238,7 @@ int main(int argc, char** argv)
   output_file = string_to_char(_s_output_file);
   string _s_opt_exclude_gtids_str = virtual_slave_config.Read("exclude_gtids",_s_opt_exclude_gtids_str);
   opt_exclude_gtids_str = strdup(_s_opt_exclude_gtids_str.data());
-  char* log_file = strdup("virtual_slave.log");
+  virtual_slave_log_file = strdup("virtual_slave.log");
 
   binlog_file_open_mode = O_WRONLY | O_BINARY;
   respond_pos = 0;
@@ -1243,7 +1246,7 @@ int main(int argc, char** argv)
   recovery_mode =false;
   re_connect_start_position=0;
 
-  if(prepare_log_file(log_file) != OK_CONTINUE)
+  if(prepare_log_file(virtual_slave_log_file) != OK_CONTINUE)
   {
     return 1;
   }
