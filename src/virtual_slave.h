@@ -44,6 +44,9 @@ extern bool semi_sync_need_reply;
 char* index_file_name = strdup("virtual_slave-bin.index");
 File index_file_fd;
 
+//sync mode
+int fsync_mode;
+
 char* line_b = strdup("\n");
 enum Exit_status {
     /** No error occurred and execution should continue. */

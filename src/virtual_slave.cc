@@ -1115,8 +1115,6 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
       return retval;
     }
 
-
-
     /*
       Let's adjust offset for remote log as for local log to produce
       similar text and to have --stop-position to work identically.
@@ -1125,20 +1123,22 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
     binlogRelayIoParam->master_log_name = new_binlog_file_name;
     binlogRelayIoParam->master_log_pos = respond_pos;
 
-    //flush or flush+sync binlog file befor replay ack=
-    if(fflush(result_file))
-    {
-      sql_print_error("fflush file %s failed",log_file_name);
-      return ERROR_STOP;
-    }
-
     if(semi_sync_need_reply)
     {
-      if(fsync(result_file_no))
+      if(fflush(result_file))
       {
-        sql_print_error("Sync file %s failed",log_file_name);
+        sql_print_error("fflush file %s failed",log_file_name);
         return ERROR_STOP;
       }
+      if(fsync_mode)
+      {
+        if(fsync(result_file_no))
+        {
+          sql_print_error("Sync file %s failed",log_file_name);
+          return ERROR_STOP;
+        }
+      }
+
     }
 
     //必须先将事务落盘，再做ack。
@@ -1240,6 +1240,7 @@ int main(int argc, char** argv)
   opt_exclude_gtids_str = strdup(_s_opt_exclude_gtids_str.data());
   virtual_slave_log_file = strdup("virtual_slave.log");
   log_level = virtual_slave_config.Read("log_level",0);
+  fsync_mode = virtual_slave_config.Read("fsync_mode",0);
 
   binlog_file_open_mode = O_WRONLY | O_BINARY;
   respond_pos = 0;
