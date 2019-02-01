@@ -33,7 +33,7 @@ using std::string;
 #include "prealloced_array.h"
 #include "virtual_slave.h"
 #include "Config/Config.h"
-#include "log/log.h"
+#include "log/vs_log.h"
 
 /*
   error() is used in macro BINLOG_ERROR which is invoked in
@@ -1239,6 +1239,7 @@ int main(int argc, char** argv)
   string _s_opt_exclude_gtids_str = virtual_slave_config.Read("exclude_gtids",_s_opt_exclude_gtids_str);
   opt_exclude_gtids_str = strdup(_s_opt_exclude_gtids_str.data());
   virtual_slave_log_file = strdup("virtual_slave.log");
+  log_level = virtual_slave_config.Read("log_level",0);
 
   binlog_file_open_mode = O_WRONLY | O_BINARY;
   respond_pos = 0;
@@ -1859,7 +1860,7 @@ Exit_status prepare_log_file(char* log_file)
     sql_print_error("change dir failed %s",output_file);
     return ERROR_STOP;
   }
-  init_error_log();
+  init_error_log(log_level);
 
   if (open_error_log(log_file))
   {

@@ -28,7 +28,7 @@
 #include "mysql.h"
 //#include "log.h"                                /* sql_print_information */
 #include <stdio.h>
-#include "log/log.h"
+#include "log/vs_log.h"
 
 /**
   Replication binlog relay IO observer parameter

@@ -1,3 +1,7 @@
+//
+// Created by Ashe on 2019-02-01.
+//
+
 /* Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
@@ -24,7 +28,7 @@
     Abort logging when we get an error in reading or writing log files
 */
 
-#include "./log.h"
+#include "vs_log.h"
 #include "mysqld_error.h"
 
 //#include "sql_audit.h"    // mysql_audit_general_log
@@ -48,11 +52,13 @@
 
 #include <pthread.h>
 
+
 using std::min;
 using std::max;
 
 /* max size of log messages (error log, plugins' logging, general log) */
 static const uint MAX_LOG_BUFFER_SIZE= 1024;
+int log_error_level;
 
 
 /* 26 for regular timestamp, plus 7 (".123456") when using micro-seconds */
@@ -163,12 +169,13 @@ void flush_error_log_messages()
 }
 
 
-void init_error_log()
+void init_error_log(int log_level)
 {
   DBUG_ASSERT(!error_log_initialized);
 //  mysql_mutex_init(key_LOCK_error_log, &LOCK_error_log, MY_MUTEX_INIT_FAST);
   pthread_mutex_init(&mutex_error_log,NULL);
   error_log_initialized= true;
+  log_error_level = log_level;
 }
 
 
@@ -278,7 +285,7 @@ static void print_buffer_to_file(enum loglevel level, const char *buffer,
             my_timestamp,
             thread_id,
             (level == ERROR_LEVEL ? "ERROR" : level == WARNING_LEVEL ?
-             "Warning" : "Note"),
+                                              "Warning" : "Note"),
             (int) length, buffer);
 
     fflush(stderr);
@@ -296,13 +303,11 @@ void error_log_print(enum loglevel level, const char *format, va_list args)
   size_t length;
   DBUG_ENTER("error_log_print");
 
-  const ulong log_error_verbosity = 4;
-  if (static_cast<ulong>(level) < log_error_verbosity) {
+
+  if (static_cast<int>(level) < log_error_level) {
     length = my_vsnprintf(buff, sizeof(buff), format, args);
     print_buffer_to_file(level, buff, length);
   }
-
-
   DBUG_VOID_RETURN;
 }
 

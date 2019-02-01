@@ -1,20 +1,10 @@
-/* Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
+//
+// Created by Ashe·Sun on 2019-02-01.
+//
 
-   This program is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; version 2 of the License.
+#ifndef MYSQL_VS_LOG_H
+#define MYSQL_VS_LOG_H
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU General Public License for more details.
-
-   You should have received a copy of the GNU General Public License
-   along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
-
-#ifndef VIRTUAL_SLAVE_LOG_H
-#define VIRTUAL_SLAVE_LOG_H
 #include "my_global.h"
 #include <pthread.h>
 //#include "auth/sql_security_ctx.h"
@@ -24,28 +14,28 @@
 // Error Log
 //
 ////////////////////////////////////////////////////////////
-
+extern int log_error_level;
 
 /**
    Prints a printf style error message to the error log.
    @see error_log_print
 */
 void sql_print_error(const char *format, ...)
-  MY_ATTRIBUTE((format(printf, 1, 2)));
+MY_ATTRIBUTE((format(printf, 1, 2)));
 
 /**
    Prints a printf style warning message to the error log.
    @see error_log_print
 */
 void sql_print_warning(const char *format, ...)
-  MY_ATTRIBUTE((format(printf, 1, 2)));
+MY_ATTRIBUTE((format(printf, 1, 2)));
 
 /**
    Prints a printf style information message to the error log.
    @see error_log_print
 */
 void sql_print_information(const char *format, ...)
-  MY_ATTRIBUTE((format(printf, 1, 2)));
+MY_ATTRIBUTE((format(printf, 1, 2)));
 
 /**
    Prints a printf style message to the error log.
@@ -57,7 +47,7 @@ void sql_print_information(const char *format, ...)
    @param args           va_list list of arguments for the message
 */
 void error_log_print(enum loglevel level, const char *format, va_list args)
-  MY_ATTRIBUTE((format(printf, 2, 0)));
+MY_ATTRIBUTE((format(printf, 2, 0)));
 
 /**
   Initialize structures (e.g. mutex) needed by the error log.
@@ -68,7 +58,7 @@ void error_log_print(enum loglevel level, const char *format, va_list args)
   @note The error log can still be used before this function is called,
   but that should only be done single-threaded.
 */
-void init_error_log();
+void init_error_log(int );
 
 /**
   Open the error log and redirect stderr and optionally stdout
@@ -134,4 +124,4 @@ bool log_syslog_update_settings();
 bool log_syslog_init();
 void log_syslog_exit();
 
-#endif /* VIRTUAL_SLAVE_LOG_H*/
+#endif //MYSQL_VS_LOG_H
