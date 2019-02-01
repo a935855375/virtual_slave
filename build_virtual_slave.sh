@@ -1,6 +1,6 @@
 #!/bin/bash
-mysql_source_dir= $1
-if [ -d "$mysql_source_dir" ];then
+mysql_source_dir=$1
+if [ -f "$mysql_source_dir/CMakeLists.txt" ];then
 				echo "MySQL源代码路径: $mysql_source_dir 存在"
 else
 				echo "MySQL源代码路径不存在"
@@ -16,12 +16,11 @@ if [ -d "$mysql_source_dir/$virtual_slave_soure_dir" ];then
 else
 				echo "拷贝源代码文件夹$virtual_slave_soure_dir到$mysql_source_dir"
 				cp -r $virtual_slave_soure_dir  $mysql_source_dir/;
-				exit
-
+fi
 echo "备份MySQL源代码CMakeLists.txt"
 cp $mysql_source_dir/CMakeLists.txt $mysql_source_dir/CMakeLists.txt.backup
 
-echo "add_subdirectory(./$virtual_slave_soure_dir)" >>  $mysql_source_dir/CMakeLists.txt
+echo "add_subdirectory(./virtual_slave)" >>  $mysql_source_dir/CMakeLists.txt
 cd $mysql_source_dir
 rm ./CMakeCache.txt
 cmake . -DCMAKE_BUILD_TYPE=Release -DDOWNLOAD_BOOST=1 -DWITH_BOOST=/usr/local/boost -DCMAKE_INSTALL_PREFIX=/usr/local/virtual_slave
