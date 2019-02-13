@@ -43,7 +43,9 @@ chmod +x /usr/bin/virtual_slave
 #下载virtual_slave源代码
 git glone https://github.com/sunashe/virtual_slave.git
 
-#
+#cd virtual_slave
+#sh ./build_virtual_slave.sh  /data/backup/mysql-server-mysql-5.7.18 # mysql源代码路径
+#cp ./virtual_slave /usr/bin/ && chmod +x /usr/bin/virtual_slave
 ```
 
 ### 配置文件示例
@@ -76,6 +78,9 @@ net_read_time_out = 10
 
 #错误日志文件
 log_file=virtual_slave.log
+
+#日志级别
+log_level=3
 
 #日志同步模式
 fsync_mode = 1
