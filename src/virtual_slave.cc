@@ -1141,7 +1141,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
 
     }
 
-    //必须先将事务落盘，再做ack。
+    //ack
     handle_repl_semi_slave_queue_event((void*)binlogRelayIoParam,event_buf,0,0);
 
   }

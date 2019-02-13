@@ -71,6 +71,13 @@ heartbeat_period = 5
 
 #网络超时时间，要大于心跳间隔，不然在写入低峰期virtual_slave会尝试重连。
 net_read_time_out = 10
+
+#错误日志文件
+log_file=virtual_slave.log
+
+#日志同步模式
+fsync_mode = 1
+
 ```
 
 ### 启动示例
@@ -138,3 +145,9 @@ mysql> show master status;
 关于一致性校验的补充说明：
 - 如果master上设置了Binlog_Do_DB/Binlog_Ignore_DB，则可能出现md5不一致的情况
 - 如果是master是statment格式，并且存在load data情况，则binlog md5不一致。
+
+## 相关资料
+1. [virtual_slave如何处理master故障](./doc/virtual_slave如何处理master故障.md)
+2. [断点续传](./doc/断点续传.md)
+3. [性能测试](./doc/性能测试.md)
+4. [问题列表](./doc/问题列表.md)
