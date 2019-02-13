@@ -30,7 +30,9 @@ virtual_slave二进制文件不依赖其它第三方库文件，拿来即用。
 ## 二进制安装
 
 ```$xslt
-wget 
+wget https://github.com/sunashe/virtual_slave/releases/download/1.0/virtual_slave
+mv ./virtual_slave /usr/bin/
+chmod +x /usr/bin/virtual_slave
 ```
 
 
