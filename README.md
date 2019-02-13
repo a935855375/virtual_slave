@@ -159,3 +159,6 @@ mysql> show master status;
 2. [断点续传](./doc/断点续传.md)
 3. [性能测试](./doc/性能测试.md)
 4. [问题列表](./doc/问题列表.md)
+
+欢迎加入MySQL内核交流QQ群
+群号:860945825
