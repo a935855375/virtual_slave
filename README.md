@@ -43,9 +43,10 @@ chmod +x /usr/bin/virtual_slave
 #下载virtual_slave源代码
 git glone https://github.com/sunashe/virtual_slave.git
 
-#cd virtual_slave
-#sh ./build_virtual_slave.sh  /data/backup/mysql-server-mysql-5.7.18 # mysql源代码路径
-#cp ./virtual_slave /usr/bin/ && chmod +x /usr/bin/virtual_slave
+#编译
+cd virtual_slave
+sh ./build_virtual_slave.sh  /data/backup/mysql-server-mysql-5.7.18 # mysql源代码路径
+cp ./virtual_slave /usr/bin/ && chmod +x /usr/bin/virtual_slave
 ```
 
 ### 配置文件示例
